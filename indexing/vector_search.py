@@ -18,7 +18,7 @@ class VectorSearch:
         self.index = hnswlib.Index(space=space, dim=dimension)
         self.index.init_index(max_elements=10000,
                               ef_construction=ef_construction, M=M)
-        self.index.set_ef(50)  # Controls search accuracy
+        self.index.set_ef(200)  # Controls search accuracy
 
     def add_vectors(self, vectors, metadata):
         """
@@ -101,7 +101,7 @@ class VectorSearch:
         self.index = hnswlib.Index(space=self.space, dim=self.dimension)
         self.index.init_index(max_elements=max_elements,
                               ef_construction=200, M=16)
-        self.index.set_ef(50)
+        self.index.set_ef(200)
         ids = np.arange(len(vectors))
         self.index.add_items(vectors, ids)
 

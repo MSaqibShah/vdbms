@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+hnswlib
+numpy
+scikit-learn
+sqlparse
+pydantic
+python-dotenv
+pickle-mixin

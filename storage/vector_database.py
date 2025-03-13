@@ -22,8 +22,8 @@ class VectorDatabase:
 
         # Initialize HNSWlib
         self.index = hnswlib.Index(space='l2', dim=dimension)
-        self.index.init_index(max_elements=10000, ef_construction=200, M=16)
-        self.index.set_ef(50)
+        self.index.init_index(max_elements=10000, ef_construction=200, M=32)
+        self.index.set_ef(200)
 
         # check if the store path exists
         if not os.path.exists(self.store_path):
