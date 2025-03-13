@@ -42,7 +42,7 @@ The system consists of three core layers:
    ```
 4. **Start the API**
    ```bash
-   uvicorn app:app --host 0.0.0.0 --port 8000
+   uvicorn main:app --reload --port 8080 
    ```
 
    **To test on terminal**
