@@ -11,8 +11,7 @@ class VectorDatabase:
         Initialize the vector database with HNSWlib and SQLite.
 
         :param dimension: Dimensionality of vectors.
-        :param db_path: Path to the SQLite database for metadata.
-        :param vector_index_path: Path to save the HNSWlib vector index.
+        :param store_path: Path to the folder storing index and metadata.
         """
         self.dimension = dimension
         self.store_path = store_path
@@ -25,7 +24,7 @@ class VectorDatabase:
         self.index.init_index(max_elements=10000, ef_construction=200, M=16)
         self.index.set_ef(50)
 
-        # check if the store path exists
+        # Ensure store path and metadata folder exist
         if not os.path.exists(self.store_path):
             try:
                 os.makedirs(self.store_path)
@@ -67,15 +66,14 @@ class VectorDatabase:
             raise ValueError("Vectors and metadata length must match.")
 
         for vector, metadata in zip(vectors, metadata_list):
-            # Generate a unique hashed ID for the vector
-            # Use vector content to generate a unique hash
+            # Generate a unique hashed ID for the vector based on its content
             vector_id = hash(pickle.dumps(vector))
             vector_id = vector_id & 0x7FFFFFFF
 
             # Add the vector to HNSWlib
             self.index.add_items(np.array([vector]), np.array([vector_id]))
 
-            # Save metadata
+            # Save metadata and record it in SQLite
             metadata_path = self._save_metadata(vector_id, metadata)
             self._insert_metadata_record(vector_id, metadata_path)
 
@@ -124,7 +122,6 @@ class VectorDatabase:
             np.array(query_vector).reshape(1, -1), k=k)
 
         results = []
-
         for vector_id, distance in zip(labels[0], distances[0]):
             metadata = self._load_metadata(vector_id)
             results.append((vector_id, distance, metadata))
@@ -139,10 +136,8 @@ class VectorDatabase:
         """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-
         cursor.execute(
             f"SELECT metadata_path FROM metadata WHERE vector_id={vector_id};")
-
         result = cursor.fetchone()
         conn.close()
         if not result:
@@ -150,8 +145,7 @@ class VectorDatabase:
 
         metadata_path = result[0]
         if not os.path.exists(metadata_path):
-            raise ValueError(
-                f"Metadata file for vector ID {vector_id} is missing.")
+            raise ValueError(f"Metadata file for vector ID {vector_id} is missing.")
 
         with open(metadata_path, "rb") as f:
             return pickle.load(f)
@@ -172,24 +166,50 @@ class VectorDatabase:
         """
         return self.index.get_current_count()
 
+    def list_all(self):
+        """
+        List all stored vectors' metadata.
+        
+        :return: A list of tuples (vector_id, metadata).
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT vector_id, metadata_path FROM metadata")
+        rows = cursor.fetchall()
+        conn.close()
+
+        results = []
+        for vector_id, metadata_path in rows:
+            try:
+                with open(metadata_path, "rb") as f:
+                    metadata = pickle.load(f)
+            except Exception as e:
+                metadata = f"Error loading metadata: {e}"
+            results.append((vector_id, metadata))
+        return results
+
 
 # Example Usage
 if __name__ == "__main__":
-    # Initialize database
+    # Initialize database with a given dimension, e.g., 128
     db = VectorDatabase(dimension=128)
 
     # Add vectors and metadata
     vectors = np.random.random((10, 128)).astype('float32')
-    metadata_list = [{"name": f"Vector {i}", "info": f"Info {i}"}
-                     for i in range(10)]
+    metadata_list = [{"name": f"Vector {i}", "info": f"Info {i}"} for i in range(10)]
     db.add_vectors(vectors, metadata_list)
 
-    # Search
+    # Search for nearest neighbors
     print("Searching for nearest neighbors...")
     query = np.random.random(128).astype('float32')
     print("Query Vector:", query)
     results = db.search(query, k=5)
     print("Search Results:", results)
+
+    # List all stored vector metadata
+    print("Listing all vectors:")
+    all_vectors = db.list_all()
+    print(all_vectors)
 
     # Save and load index
     db.save_index()

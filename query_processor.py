@@ -1,7 +1,7 @@
 import os
 import re
 import numpy as np
-from VectorSearch import VectorSearch
+from vs import VectorDatabase
 from tabulate import tabulate
 from sentence_transformers import SentenceTransformer
 
@@ -19,13 +19,13 @@ class QueryProcessor:
     def _save(self):
         if self.db:
             os.makedirs(os.path.dirname(self.index_path), exist_ok=True)
-            self.db.save_index(self.index_path)
+            self.db.save_index()
             with open(self.index_path + ".config", "w") as f:
                 f.write(str(self.dimension))
 
     def _load(self):
         config_path = self.index_path + ".config"
-        if not (os.path.exists(self.index_path) and os.path.exists(self.index_path + ".meta") and os.path.exists(config_path)):
+        if not (os.path.exists(self.index_path) and os.path.exists(config_path)):
             return
 
         try:
@@ -33,8 +33,8 @@ class QueryProcessor:
                 self.dimension = int(f.read().strip())
 
             print(f"ℹ️ Loading existing vector index with dimension {self.dimension}")
-            self.db = VectorSearch(dimension=self.dimension)
-            self.db.load_index(self.index_path)
+            self.db = VectorDatabase(dimension=self.dimension)
+            self.db.load_index()
 
         except Exception as e:
             print(f"⚠️ Failed to load index: {e}")
@@ -87,7 +87,7 @@ class QueryProcessor:
 
             if self.db is None:
                 self.dimension = len(vector_vals)
-                self.db = VectorSearch(dimension=self.dimension)
+                self.db = VectorDatabase(dimension=self.dimension)
                 print(f"ℹ️ Inferred vector dimension: {self.dimension}")
 
             elif len(vector_vals) != self.dimension:
@@ -170,7 +170,7 @@ class QueryProcessor:
 
             if self.dimension is None:
                 self.dimension = len(vector_query)
-                self.db = VectorSearch(dimension=self.dimension)
+                self.db = VectorDatabase(dimension=self.dimension)
             elif len(vector_query) != self.dimension:
                 return f"❌ Embedding dimension mismatch! Expected {self.dimension}, got {len(vector_query)}."
 
@@ -208,7 +208,7 @@ class QueryProcessor:
 
             if self.db is None:
                 self.dimension = len(vector)
-                self.db = VectorSearch(dimension=self.dimension)
+                self.db = VectorDatabase(dimension=self.dimension)
                 print(f"ℹ️ Inferred vector dimension from text: {self.dimension}")
             elif len(vector) != self.dimension:
                 return f"❌ Embedding dimension mismatch! Expected {self.dimension}, got {len(vector)}."
@@ -231,20 +231,12 @@ class QueryProcessor:
             return "⚠️ No vectors in memory."
 
         try:
-            count = self.db.get_vector_count()
-            if count == 0:
-                return "⚠️ No vectors stored."
-
-            rows = []
-            for i in range(count):
-                if i in self.db.metadata_store:
-                    rows.append([i, self.db.metadata_store[i]])
-
-            if not rows:
+            # Delegate listing to the VectorDatabase instance.
+            results = self.db.list_all()  # Expects vs.py to provide list_all()
+            if not results:
                 return "⚠️ No metadata found for any vectors."
 
-            return tabulate(rows, headers=["Vector ID", "Metadata"], tablefmt="pretty")
-
+            return tabulate(results, headers=["Vector ID", "Metadata"], tablefmt="pretty")
         except Exception as e:
             return f"⚠️ Error while listing all vectors: {e}"
 
