@@ -5,6 +5,8 @@ import os
 import pickle
 import hashlib
 import time
+import json  # For schema persistence
+import shutil  # For deleting table directories from disk
 
 class VectorDatabase:
     def __init__(self, dimension, store_path="./store"):
@@ -16,9 +18,9 @@ class VectorDatabase:
         """
         self.dimension = dimension
         self.store_path = store_path
-        self.db_path = store_path + "/metadata.db"
-        self.vector_index_path = store_path + "/vectors.hnsw"
-        self.binary_metadata_path = store_path + "/metadata"
+        self.db_path = os.path.join(store_path, "metadata.db")
+        self.vector_index_path = os.path.join(store_path, "vectors.hnsw")
+        self.binary_metadata_path = os.path.join(store_path, "metadata")
 
         # Initialize HNSWlib
         self.index = hnswlib.Index(space='l2', dim=dimension)
@@ -27,17 +29,9 @@ class VectorDatabase:
 
         # Ensure store path and metadata folder exist
         if not os.path.exists(self.store_path):
-            try:
-                os.makedirs(self.store_path)
-            except OSError as e:
-                print(e)
-                raise
+            os.makedirs(self.store_path)
         if not os.path.exists(self.binary_metadata_path):
-            try:
-                os.makedirs(self.binary_metadata_path)
-            except OSError as e:
-                print(e)
-                raise
+            os.makedirs(self.binary_metadata_path)
 
         # Initialize SQLite
         self._init_metadata_db()
@@ -68,13 +62,8 @@ class VectorDatabase:
 
         for vector, metadata in zip(vectors, metadata_list):
             # Generate a unique hashed ID for the vector based on its content
-            vector_id = hash(pickle.dumps(vector))
-            vector_id = vector_id & 0x7FFFFFFF
-
-            # Add the vector to HNSWlib
+            vector_id = hash(pickle.dumps(vector)) & 0x7FFFFFFF
             self.index.add_items(np.array([vector]), np.array([vector_id]))
-
-            # Save metadata and record it in SQLite
             metadata_path = self._save_metadata(vector_id, metadata)
             self._insert_metadata_record(vector_id, metadata_path)
 
@@ -86,14 +75,10 @@ class VectorDatabase:
         :param metadata: Metadata object to store.
         :return: Path to the saved metadata file.
         """
-        metadata_path = f"{self.binary_metadata_path}/metadata_{vector_id}.bin"
-        try:
-            with open(metadata_path, "wb") as f:
-                pickle.dump(metadata, f)
-            return metadata_path
-        except Exception as e:
-            print(e)
-            raise
+        metadata_path = os.path.join(self.binary_metadata_path, f"metadata_{vector_id}.bin")
+        with open(metadata_path, "wb") as f:
+            pickle.dump(metadata, f)
+        return metadata_path
 
     def _insert_metadata_record(self, vector_id, metadata_path):
         """
@@ -104,10 +89,8 @@ class VectorDatabase:
         """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO metadata (vector_id, metadata_path) VALUES (?, ?)",
-            (vector_id, metadata_path)
-        )
+        cursor.execute("INSERT INTO metadata (vector_id, metadata_path) VALUES (?, ?)",
+                       (vector_id, metadata_path))
         conn.commit()
         conn.close()
 
@@ -119,9 +102,7 @@ class VectorDatabase:
         :param k: Number of nearest neighbors to return.
         :return: List of tuples (vector_id, distance, metadata) for the top-k neighbors.
         """
-        labels, distances = self.index.knn_query(
-            np.array(query_vector).reshape(1, -1), k=k)
-
+        labels, distances = self.index.knn_query(np.array(query_vector).reshape(1, -1), k=k)
         results = []
         for vector_id, distance in zip(labels[0], distances[0]):
             metadata = self._load_metadata(vector_id)
@@ -137,17 +118,14 @@ class VectorDatabase:
         """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute(
-            f"SELECT metadata_path FROM metadata WHERE vector_id={vector_id};")
+        cursor.execute(f"SELECT metadata_path FROM metadata WHERE vector_id={vector_id};")
         result = cursor.fetchone()
         conn.close()
         if not result:
             raise ValueError(f"Metadata for vector ID {vector_id} not found.")
-
         metadata_path = result[0]
         if not os.path.exists(metadata_path):
             raise ValueError(f"Metadata file for vector ID {vector_id} is missing.")
-
         with open(metadata_path, "rb") as f:
             return pickle.load(f)
 
@@ -178,7 +156,6 @@ class VectorDatabase:
         cursor.execute("SELECT vector_id, metadata_path FROM metadata")
         rows = cursor.fetchall()
         conn.close()
-
         results = []
         for vector_id, metadata_path in rows:
             try:
@@ -189,152 +166,161 @@ class VectorDatabase:
             results.append((vector_id, metadata))
         return results
 
-# -------------------------------------------------------
-# Table and TablesManager
-# -------------------------------------------------------
+    def delete_vector(self, vector_id):
+        """
+        Delete the vector and its associated metadata.
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT metadata_path FROM metadata WHERE vector_id=?", (vector_id,))
+        result = cursor.fetchone()
+        if result:
+            metadata_path = result[0]
+            if os.path.exists(metadata_path):
+                os.remove(metadata_path)
+            cursor.execute("DELETE FROM metadata WHERE vector_id=?", (vector_id,))
+            conn.commit()
+        conn.close()
+        try:
+            self.index.mark_deleted(vector_id)
+        except Exception:
+            pass
 
 class Table:
-    """
-    A single table with typed schema: a list of (col_name, col_type).
-    Each table gets its own VectorDatabase once dimension is known.
-    """
-    def __init__(self, name, schema, store_path):
+    def __init__(self, name, schema_info, store_path):
         """
-        :param name: Table name, e.g. 'users'
-        :param schema: e.g. [("id","INT"),("name","TEXT"),("created_at","DATETIME")]
-        :param store_path: folder where this table's data is stored
+        :param name: Table name (e.g., 'users')
+        :param schema_info: A dictionary with keys "columns" (list of [col_name, col_type])
+                            and "dimension" (int or None).
+        :param store_path: Directory where this table's data is stored.
         """
         self.name = name
-        # We'll store the typed schema as a list of (col_name, col_type).
-        # E.g. [("id","INT"),("title","TEXT"),("ts","DATETIME")]
-        self.schema = schema
-
+        # If the loaded schema is a legacy list, convert it.
+        if isinstance(schema_info, list):
+            schema_info = {"columns": schema_info, "dimension": None}
+        self.schema = schema_info.get("columns", [])
+        self.dimension = schema_info.get("dimension")
         self.table_id = self._generate_table_id()
         self.store_path = store_path
-        self.dimension = None      # we only know dimension once we see the first vector
-        self.vector_db = None      # lazy-init VectorDatabase
+        if self.dimension is not None:
+            self.vector_db = VectorDatabase(dimension=self.dimension, store_path=self.store_path)
+            if os.path.exists(self.vector_db.vector_index_path):
+                self.vector_db.load_index()
+        else:
+            self.vector_db = None
 
     def _generate_table_id(self):
-        """
-        Create a unique hash for the table (name + timestamp).
-        """
         text_to_hash = f"{self.name}-{time.time()}"
         return hashlib.sha256(text_to_hash.encode()).hexdigest()
 
     def insert_vectors(self, vectors, metadata_list):
-        """
-        Insert an array of vectors plus a list of metadata records.
-        The 'dimension' is determined at first insert if self.vector_db is None.
-        """
         if self.vector_db is None:
             self.dimension = vectors.shape[1]
             self.vector_db = VectorDatabase(dimension=self.dimension, store_path=self.store_path)
+            # Update the persisted schema with the new dimension.
+            schema_file = os.path.join(self.store_path, "schema.json")
+            with open(schema_file, "r") as f:
+                schema_info = json.load(f)
+            if isinstance(schema_info, list):
+                schema_info = {"columns": schema_info, "dimension": None}
+            schema_info["dimension"] = self.dimension
+            with open(schema_file, "w") as f:
+                json.dump(schema_info, f)
         self.vector_db.add_vectors(vectors, metadata_list)
 
     def search_vectors(self, query_vector, k=5):
-        """
-        Perform a nearest-neighbor search using this table's vector_db.
-        """
         if self.vector_db is None:
             return []
         return self.vector_db.search(query_vector, k=k)
 
     def get_vector_count(self):
-        """
-        How many vectors are stored in this table?
-        """
         if self.vector_db is None:
             return 0
         return self.vector_db.get_vector_count()
 
     def list_all(self):
-        """
-        Return all metadata records as (vector_id, metadata).
-        No vector search, just a table-scan from SQLite.
-        """
         if self.vector_db is None:
             return []
         return self.vector_db.list_all()
 
     def list_all_sorted_by(self, col, asc=True):
-        """
-        Return all records sorted by metadata[col].
-        """
-        all_records = self.list_all()  # [(vid, metadata), ...]
-        # Sort by metadata[col], if present
+        all_records = self.list_all()
         def sort_key(rec):
-            md = rec[1]  # the metadata dict
+            md = rec[1]
             return md.get(col, None)
-
         all_records.sort(key=sort_key, reverse=(not asc))
         return all_records
 
+    def delete_records(self, column, value):
+        if self.vector_db is None:
+            return 0
+        all_records = self.vector_db.list_all()
+        delete_count = 0
+        for vector_id, metadata in all_records:
+            if str(metadata.get(column)) == str(value):
+                self.vector_db.delete_vector(vector_id)
+                delete_count += 1
+        return delete_count
+
 class TablesManager:
-    """
-    Manages multiple Table objects. Each table is stored in a subdir of global_store_path.
-    """
     def __init__(self, global_store_path="./store"):
         self.global_store_path = global_store_path
-        self.tables = {}  # {table_name: Table obj}
+        self.tables = {}
+        if not os.path.exists(self.global_store_path):
+            os.makedirs(self.global_store_path)
+        self._load_persisted_tables()
+
+    def _load_persisted_tables(self):
+        for item in os.listdir(self.global_store_path):
+            table_dir = os.path.join(self.global_store_path, item)
+            if os.path.isdir(table_dir):
+                schema_file = os.path.join(table_dir, "schema.json")
+                if os.path.exists(schema_file):
+                    with open(schema_file, "r") as f:
+                        schema_info = json.load(f)
+                    if isinstance(schema_info, list):
+                        schema_info = {"columns": schema_info, "dimension": None}
+                    table_obj = Table(name=item, schema_info=schema_info, store_path=table_dir)
+                    self.tables[item] = table_obj
 
     def create_table(self, name, schema):
-        """
-        Create a new table with typed schema:
-          e.g. [("id","INT"),("text","TEXT"),("created_at","DATETIME")]
-        """
         if name in self.tables:
             raise ValueError(f"Table '{name}' already exists!")
-
         table_path = os.path.join(self.global_store_path, name)
         os.makedirs(table_path, exist_ok=True)
-        table_obj = Table(name=name, schema=schema, store_path=table_path)
+        # Persist schema as a dictionary with columns and dimension (initially None)
+        schema_info = {"columns": schema, "dimension": None}
+        schema_file = os.path.join(table_path, "schema.json")
+        with open(schema_file, "w") as f:
+            json.dump(schema_info, f)
+        table_obj = Table(name=name, schema_info=schema_info, store_path=table_path)
         self.tables[name] = table_obj
         return table_obj
 
     def drop_table(self, name):
-        """
-        Remove a table from memory. Optionally remove from disk too.
-        """
         if name not in self.tables:
             raise ValueError(f"Table '{name}' does not exist!")
-        # You could also remove table's data from disk:
-        # import shutil
-        # shutil.rmtree(self.tables[name].store_path, ignore_errors=True)
+        shutil.rmtree(self.tables[name].store_path, ignore_errors=True)
         del self.tables[name]
 
     def get_table(self, name):
-        """
-        Return the Table object for 'name'
-        """
         if name not in self.tables:
             raise ValueError(f"Table '{name}' does not exist!")
         return self.tables[name]
 
     def show_tables(self):
-        """
-        Return a list of (table_name, table_id, row_count, schema)
-        so the user can see existing tables.
-        """
         results = []
         for tname, tobj in self.tables.items():
             count = tobj.get_vector_count()
             results.append((tname, tobj.table_id, count, tobj.schema))
         return results
 
-# -------------------------------------------------------
-# Example usage (if you run vs.py directly)
-# -------------------------------------------------------
 if __name__ == "__main__":
-    # 1) Create a manager
+    # Example usage if vs.py is run directly.
     manager = TablesManager("./multi_tables")
-
-    # 2) Create a typed table
-    # e.g. columns: id INT, name TEXT
     schema = [("id", "INT"), ("name", "TEXT")]
     users_table = manager.create_table("users", schema)
     print("Created table 'users' with ID:", users_table.table_id)
-
-    # 3) Insert some random 3D vectors for demonstration
     vectors = np.random.random((3, 3)).astype('float32')
     metadata_list = [
         {"id": 1, "name": "Alice"},
@@ -343,17 +329,10 @@ if __name__ == "__main__":
     ]
     users_table.insert_vectors(vectors, metadata_list)
     print(f"Inserted {len(vectors)} vectors into 'users' table.")
-
-    # 4) Searching
     query = np.random.random(3).astype('float32')
     results = users_table.search_vectors(query, k=2)
     print("Nearest neighbors in 'users':", results)
-
-    # 5) Show tables
     all_info = manager.show_tables()
     print("Tables info:\n", all_info)
-
-    # 6) Listing & Sorting
-    # Suppose we want to see all user records sorted by 'id' descending
     all_records = users_table.list_all_sorted_by("id", asc=False)
     print("All user records sorted by id desc:\n", all_records)
