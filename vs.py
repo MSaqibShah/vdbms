@@ -27,13 +27,11 @@ class VectorDatabase:
         self.index.init_index(max_elements=10000, ef_construction=200, M=16)
         self.index.set_ef(50)
 
-        # Ensure store path and metadata folder exist
         if not os.path.exists(self.store_path):
             os.makedirs(self.store_path)
         if not os.path.exists(self.binary_metadata_path):
             os.makedirs(self.binary_metadata_path)
 
-        # Initialize SQLite
         self._init_metadata_db()
 
     def _init_metadata_db(self):
@@ -51,42 +49,21 @@ class VectorDatabase:
         conn.close()
 
     def add_vectors(self, vectors, metadata_list):
-        """
-        Add vectors and their associated metadata.
-
-        :param vectors: NumPy array of vectors to add (shape: [num_vectors, dimension]).
-        :param metadata_list: List of metadata corresponding to each vector.
-        """
         if len(vectors) != len(metadata_list):
             raise ValueError("Vectors and metadata length must match.")
-
         for vector, metadata in zip(vectors, metadata_list):
-            # Generate a unique hashed ID for the vector based on its content
             vector_id = hash(pickle.dumps(vector)) & 0x7FFFFFFF
             self.index.add_items(np.array([vector]), np.array([vector_id]))
             metadata_path = self._save_metadata(vector_id, metadata)
             self._insert_metadata_record(vector_id, metadata_path)
 
     def _save_metadata(self, vector_id, metadata):
-        """
-        Save metadata to a binary file.
-
-        :param vector_id: Hashed integer ID of the vector.
-        :param metadata: Metadata object to store.
-        :return: Path to the saved metadata file.
-        """
         metadata_path = os.path.join(self.binary_metadata_path, f"metadata_{vector_id}.bin")
         with open(metadata_path, "wb") as f:
             pickle.dump(metadata, f)
         return metadata_path
 
     def _insert_metadata_record(self, vector_id, metadata_path):
-        """
-        Insert metadata record into the SQLite database.
-
-        :param vector_id: Hashed integer ID of the vector.
-        :param metadata_path: Path to the binary metadata file.
-        """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute("INSERT INTO metadata (vector_id, metadata_path) VALUES (?, ?)",
@@ -95,13 +72,6 @@ class VectorDatabase:
         conn.close()
 
     def search(self, query_vector, k=5):
-        """
-        Search for the top-k nearest neighbors of a query vector.
-
-        :param query_vector: NumPy array of the query vector (shape: [dimension]).
-        :param k: Number of nearest neighbors to return.
-        :return: List of tuples (vector_id, distance, metadata) for the top-k neighbors.
-        """
         labels, distances = self.index.knn_query(np.array(query_vector).reshape(1, -1), k=k)
         results = []
         for vector_id, distance in zip(labels[0], distances[0]):
@@ -110,12 +80,6 @@ class VectorDatabase:
         return results
 
     def _load_metadata(self, vector_id):
-        """
-        Load metadata from its binary file using vector ID.
-
-        :param vector_id: Hashed integer ID of the vector.
-        :return: Metadata object.
-        """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute(f"SELECT metadata_path FROM metadata WHERE vector_id={vector_id};")
@@ -129,28 +93,31 @@ class VectorDatabase:
         with open(metadata_path, "rb") as f:
             return pickle.load(f)
 
+    def update_metadata(self, vector_id, new_metadata):
+        """
+        Update the metadata file for a given vector.
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT metadata_path FROM metadata WHERE vector_id=?", (vector_id,))
+        result = cursor.fetchone()
+        conn.close()
+        if not result:
+            raise ValueError(f"Metadata for vector ID {vector_id} not found.")
+        metadata_path = result[0]
+        with open(metadata_path, "wb") as f:
+            pickle.dump(new_metadata, f)
+
     def save_index(self):
-        """Save the HNSWlib vector index to a file."""
         self.index.save_index(self.vector_index_path)
 
     def load_index(self):
-        """Load the HNSWlib vector index from a file."""
         self.index.load_index(self.vector_index_path)
 
     def get_vector_count(self):
-        """
-        Get the total number of vectors in the index.
-
-        :return: Total vector count.
-        """
         return self.index.get_current_count()
 
     def list_all(self):
-        """
-        List all stored vectors' metadata.
-        
-        :return: A list of tuples (vector_id, metadata).
-        """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute("SELECT vector_id, metadata_path FROM metadata")
@@ -167,9 +134,6 @@ class VectorDatabase:
         return results
 
     def delete_vector(self, vector_id):
-        """
-        Delete the vector and its associated metadata.
-        """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute("SELECT metadata_path FROM metadata WHERE vector_id=?", (vector_id,))
@@ -195,7 +159,6 @@ class Table:
         :param store_path: Directory where this table's data is stored.
         """
         self.name = name
-        # If the loaded schema is a legacy list, convert it.
         if isinstance(schema_info, list):
             schema_info = {"columns": schema_info, "dimension": None}
         self.schema = schema_info.get("columns", [])
@@ -262,6 +225,28 @@ class Table:
                 delete_count += 1
         return delete_count
 
+    def update_records(self, condition_column, condition_value, updates):
+        """
+        Update all records where metadata[condition_column] equals condition_value.
+        :param condition_column: The column to check.
+        :param condition_value: The value to match.
+        :param updates: A dictionary of {column: new_value} to update.
+        :return: Number of records updated.
+        """
+        if self.vector_db is None:
+            return 0
+        all_records = self.vector_db.list_all()  # returns list of (vector_id, metadata)
+        update_count = 0
+        for vector_id, metadata in all_records:
+            if str(metadata.get(condition_column)) == str(condition_value):
+                metadata.update(updates)
+                # Re-write the metadata file
+                file_path = os.path.join(self.vector_db.binary_metadata_path, f"metadata_{vector_id}.bin")
+                with open(file_path, "wb") as f:
+                    pickle.dump(metadata, f)
+                update_count += 1
+        return update_count
+
 class TablesManager:
     def __init__(self, global_store_path="./store"):
         self.global_store_path = global_store_path
@@ -288,7 +273,6 @@ class TablesManager:
             raise ValueError(f"Table '{name}' already exists!")
         table_path = os.path.join(self.global_store_path, name)
         os.makedirs(table_path, exist_ok=True)
-        # Persist schema as a dictionary with columns and dimension (initially None)
         schema_info = {"columns": schema, "dimension": None}
         schema_file = os.path.join(table_path, "schema.json")
         with open(schema_file, "w") as f:

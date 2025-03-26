@@ -64,6 +64,10 @@ class QueryProcessor:
                 return self._handle_insert_text(sql_str)
             else:
                 return self._handle_insert_typed(sql_str)
+        
+        # 9) UPDATE (semantic search)
+        elif sql_str.upper().startswith("UPDATE"):
+            return self._handle_update_record(sql_str)
 
         else:
             return "❌ Unsupported or invalid SQL statement."
@@ -274,6 +278,42 @@ class QueryProcessor:
         vectors = np.array([vector], dtype="float32")
         table_obj.insert_vectors(vectors, [row_data])
         return f"✅ Inserted typed record into table '{table_name}' with columns {columns}"
+
+    # ----------------------------------------------------------------------
+    # 10) UPDATE RECORD from table
+    # ----------------------------------------------------------------------
+    def _handle_update_record(self, sql):
+        """
+        UPDATE <table_name> SET col1 = 'new_val', col2 = 'new_val2' WHERE condition_col = 'condition_value';
+        """
+        pattern = r"UPDATE\s+(\w+)\s+SET\s+(.*?)\s+WHERE\s+(\w+)\s*=\s*'(.*?)'\s*;?\s*$"
+        match = re.match(pattern, sql, re.IGNORECASE)
+        if not match:
+            return "❌ Invalid UPDATE syntax. Expected: UPDATE <table> SET col1 = 'val1', col2 = 'val2' WHERE col = 'value';"
+        table_name = match.group(1)
+        set_clause = match.group(2)
+        condition_column = match.group(3)
+        condition_value = match.group(4)
+        updates = {}
+        assignments = set_clause.split(',')
+        for assign in assignments:
+            assign = assign.strip()
+            m = re.match(r"(\w+)\s*=\s*'(.*?)'", assign)
+            if not m:
+                return f"❌ Invalid assignment in UPDATE: {assign}"
+            col = m.group(1)
+            new_val = m.group(2)
+            updates[col] = new_val
+        try:
+            table_obj = self.tables_manager.get_table(table_name)
+        except ValueError as ve:
+            return f"⚠️ {ve}"
+        updated_count = table_obj.update_records(condition_column, condition_value, updates)
+        if updated_count == 0:
+            return f"⚠️ No records updated in table '{table_name}'."
+        else:
+            return f"✅ Updated {updated_count} record(s) in table '{table_name}'."
+
 
     # ----------------------------------------------------------------------
     # HELPER METHODS
