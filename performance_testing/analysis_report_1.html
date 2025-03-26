@@ -1,0 +1,77 @@
+<html><head><title>Performance Testing Analysis Report</title>
+<style>
+body { font-family: Arial, sans-serif; margin: 20px; }
+h1 { color: #2E5C6E; }
+h2 { color: #3E7C8C; }
+table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+th, td { border: 1px solid #dddddd; text-align: left; padding: 8px; }
+tr:nth-child(even) { background-color: #f9f9f9; }
+</style>
+</head><body>
+<h1>Performance Testing Analysis Report</h1>
+<p><strong>Number of runs per model:</strong> 5</p>
+<h2>Aggregated Results (in Seconds)</h2>
+<table>
+<tr><th>Model</th><th>Create Time (s)</th><th>Read Time (s)</th><th>Update Time (s)</th><th>Delete Time (s)</th><th>Search Time (s)</th></tr>
+<tr>
+<td>sentence-transformers/all-MiniLM-L6-v2</td>
+<td>1.766293 ± 1.569047</td>
+<td>0.000001 ± 0.000001</td>
+<td>0.018699 ± 0.021477</td>
+<td>0.000006 ± 0.000008</td>
+<td>0.046991 ± 0.046967</td>
+</tr>
+<tr>
+<td>sentence-transformers/all-distilroberta-v1</td>
+<td>3.824409 ± 3.038538</td>
+<td>0.000001 ± 0.000001</td>
+<td>0.037924 ± 0.045730</td>
+<td>0.000010 ± 0.000005</td>
+<td>0.083603 ± 0.089407</td>
+</tr>
+<tr>
+<td>sentence-transformers/all-mpnet-base-v2</td>
+<td>6.192818 ± 3.035725</td>
+<td>0.000001 ± 0.000001</td>
+<td>0.040469 ± 0.016964</td>
+<td>0.000010 ± 0.000004</td>
+<td>0.095229 ± 0.032833</td>
+</tr>
+<tr>
+<td>sentence-transformers/paraphrase-albert-small-v2</td>
+<td>2.266329 ± 0.678756</td>
+<td>0.000000 ± 0.000000</td>
+<td>0.030470 ± 0.039664</td>
+<td>0.000006 ± 0.000002</td>
+<td>0.073234 ± 0.087940</td>
+</tr>
+<tr>
+<td>sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2</td>
+<td>2.665605 ± 1.695970</td>
+<td>0.000000 ± 0.000000</td>
+<td>0.059786 ± 0.084195</td>
+<td>0.000055 ± 0.000101</td>
+<td>0.120092 ± 0.131685</td>
+</tr>
+</table>
+<h2>What Do These Metrics Mean?</h2>
+<p><strong>Create Time:</strong> The time it takes to add all documents (including computing their embeddings). Lower is better for fast data ingestion.</p>
+<p><strong>Read Time:</strong> The time taken to retrieve documents from the store. This is generally fast and similar across models.</p>
+<p><strong>Update and Delete Times:</strong> The times needed to update or remove a document. These are minor but still important for real-time operations.</p>
+<p><strong>Search Time:</strong> The time taken to process search queries. Faster search times mean better responsiveness for user queries.</p>
+<h2>Best Model Recommendation</h2>
+<p>Based on our aggregated performance metrics, the model <strong>sentence-transformers/all-MiniLM-L6-v2</strong> is the best fit for our project.</p>
+<p>This conclusion is based on the combined measurement of Create Time and Search Time – two critical factors for our application. For instance, <strong>sentence-transformers/all-MiniLM-L6-v2</strong> has an average Create Time of 1.766293 s and an average Search Time of 0.046991 s, which are the lowest among the tested models. Additionally, the low standard deviations indicate consistent performance across runs.</p>
+<h2>Performance Graphs</h2>
+<h3>Create Time</h3>
+<img src='graphs/create_time_graph.png' alt='Create Time Graph' style='max-width:100%; height:auto;'><br><br>
+<h3>Read Time</h3>
+<img src='graphs/read_time_graph.png' alt='Read Time Graph' style='max-width:100%; height:auto;'><br><br>
+<h3>Update Time</h3>
+<img src='graphs/update_time_graph.png' alt='Update Time Graph' style='max-width:100%; height:auto;'><br><br>
+<h3>Delete Time</h3>
+<img src='graphs/delete_time_graph.png' alt='Delete Time Graph' style='max-width:100%; height:auto;'><br><br>
+<h3>Search Time</h3>
+<img src='graphs/search_time_graph.png' alt='Search Time Graph' style='max-width:100%; height:auto;'><br><br>
+<p><em>Note:</em> All timing values are reported in seconds (s). Lower values indicate better performance.</p>
+</body></html>

@@ -45,49 +45,49 @@ DOCUMENTS = random.sample(large_documents, 100)
 def measure_crud_operations(vector_search):
     """
     Measures the time taken for CRUD operations on the vector store.
-    Returns a dict of timings (in seconds).
+    Returns a dict of timings (in nanoseconds) using a high-resolution timer.
     """
     timings = {}
     
     # CREATE / INSERT: Add all documents
-    start = time.time()
+    start = time.perf_counter()
     for doc in DOCUMENTS:
         vector_search.add_document(doc)
-    end = time.time()
-    timings["create_time"] = end - start
+    end = time.perf_counter()
+    timings["create_time"] = (end - start) * 1e9  # Convert seconds to nanoseconds
     
     # READ: Get all documents
-    start = time.time()
+    start = time.perf_counter()
     _ = vector_search.get_all_documents()
-    end = time.time()
-    timings["read_time"] = end - start
+    end = time.perf_counter()
+    timings["read_time"] = (end - start) * 1e9
     
     # UPDATE: Update first document if exists
-    start = time.time()
+    start = time.perf_counter()
     if vector_search.get_all_documents():
         vector_search.update_document(doc_id=0, new_text="Updated text content.")
-    end = time.time()
-    timings["update_time"] = end - start
+    end = time.perf_counter()
+    timings["update_time"] = (end - start) * 1e9
     
     # DELETE: Delete first document if exists
-    start = time.time()
+    start = time.perf_counter()
     if vector_search.get_all_documents():
         vector_search.delete_document(doc_id=0)
-    end = time.time()
-    timings["delete_time"] = end - start
+    end = time.perf_counter()
+    timings["delete_time"] = (end - start) * 1e9
     
     return timings
 
 def measure_search_performance(vector_search, queries, top_k: int = 2):
     """
     Measures the time taken to perform search queries.
-    Returns the total search time (in seconds).
+    Returns the total search time (in nanoseconds) using a high-resolution timer.
     """
-    start = time.time()
+    start = time.perf_counter()
     for query in queries:
         _ = vector_search.search(query, top_k=top_k)
-    end = time.time()
-    return end - start
+    end = time.perf_counter()
+    return (end - start) * 1e9
 
 def run_all_tests():
     """
@@ -114,7 +114,7 @@ def run_all_tests():
             # Measure search performance
             search_time = measure_search_performance(vector_search, test_queries, top_k=2)
             
-            # Save run results (times in seconds)
+            # Save run results (times in nanoseconds)
             results.append({
                 "model_name": model_name,
                 "run": run,
@@ -156,7 +156,7 @@ def aggregate_results(results):
 def generate_graphs(agg_df):
     """
     Generates bar charts for each metric with error bars representing standard deviation.
-    All values are converted to nanoseconds for readability.
+    Values are reported in nanoseconds.
     Graphs are saved as PNG files in the vdbms/performance_testing/graphs folder.
     """
     # Define graphs directory path and create it if it doesn't exist.
@@ -166,9 +166,9 @@ def generate_graphs(agg_df):
     metrics = ["create_time", "read_time", "update_time", "delete_time", "search_time"]
     for metric in metrics:
         plt.figure(figsize=(10, 7))
-        # Convert seconds to nanoseconds (1 second = 1e9 nanoseconds)
-        means_ns = agg_df[f"{metric}_mean"] * 1e9
-        stds_ns = agg_df[f"{metric}_std"] * 1e9
+        # Values are already in nanoseconds; no further conversion is needed.
+        means_ns = agg_df[f"{metric}_mean"]
+        stds_ns = agg_df[f"{metric}_std"]
         
         bars = plt.bar(agg_df["model_name"], means_ns, yerr=stds_ns, capsize=5, color='skyblue', edgecolor='black')
         plt.ylabel(f"{metric.replace('_', ' ').title()} (nanoseconds)", fontsize=12)
@@ -201,9 +201,9 @@ def generate_analysis_report(agg_df):
     best_model_row = agg_df.loc[agg_df['total_time'].idxmin()]
     best_model = best_model_row['model_name']
     
-    # Convert times to nanoseconds for display.
+    # Function to format nanosecond values.
     def ns_format(val):
-        return f"{val*1e9:,.0f}"  # formatted in nanoseconds, no decimals
+        return f"{val:,.0f}"  # formatted in nanoseconds with no decimals
 
     # Paths to graphs (assume they are in the 'graphs' subfolder)
     graphs_dir = "graphs"
