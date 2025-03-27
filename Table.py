@@ -245,7 +245,6 @@ class Table:
             query_text=query_text,
             limit=limit
         )
-        print(matched_records)
 
         count = 0
         for record in matched_records:
