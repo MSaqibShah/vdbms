@@ -3,6 +3,7 @@ from flask import Flask, request, jsonify
 from flask_swagger_ui import get_swaggerui_blueprint
 import os
 import operator
+from flask_cors import CORS  # <-- Import flask-cors
 
 # Import your DBMS components. Adjust the imports based on your project structure.
 from Table import Table, TableManager
@@ -11,6 +12,7 @@ from Databse import Database, DatabaseManager  # adjust accordingly
 from flask import url_for
 
 app = Flask(__name__)
+CORS(app)  # <-- Enable CORS for all routes
 
 # Global DB manager and query parser instances.
 db_manager = DatabaseManager()
