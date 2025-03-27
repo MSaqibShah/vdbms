@@ -229,7 +229,13 @@ def swagger_spec():
                                           "value": 1000
                                       },
                                       "limit": 2
-                                  })
+                                  }),
+        "/sql": endpoint("Execute SQL", "Executes a raw SQL query.", "post",
+                         schema_props(["query"], {
+                             "query": {"type": "string"}
+                         }),
+                         {"query": "SELECT * FROM products WHERE price > 1000;"})
+
     }
     return jsonify(spec)
 
@@ -555,6 +561,26 @@ def delete_from_table():
 
         return jsonify({'result': {"deletedCount": result, table_name: table_name}}), 200
 
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@app.route('/sql', methods=['POST'])
+def execute_sql():
+    """
+    Execute a raw SQL query.
+    Expects JSON: { "query": "<SQL_query>" }
+    """
+    data = request.get_json()
+    sql_query = data.get('query')
+    if not sql_query:
+        return jsonify({'error': "Missing 'query' parameter."}), 400
+    if not query_parser.active_db:
+        return jsonify({'error': "No active database. Use '/database/use' first."}), 400
+
+    try:
+        result = query_parser.execute(sql_query, json_resp=True)
+        return jsonify({'result': result})
     except Exception as e:
         return jsonify({'error': str(e)}), 400
 

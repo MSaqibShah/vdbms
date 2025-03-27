@@ -3,6 +3,7 @@ import csv
 from io import StringIO
 from tabulate import tabulate
 import operator
+import numpy as np
 
 SQL_KEYWORDS = {
     "CREATE", "DROP", "DATABASE", "USE", "TABLE", "SHOW",
@@ -22,15 +23,33 @@ OPERATORS = {
 }
 
 
+def convert_numpy_types(obj):
+    """
+    Recursively converts numpy data types to native Python types.
+    """
+    if isinstance(obj, np.generic):
+        return obj.item()
+    elif isinstance(obj, dict):
+        return {k: convert_numpy_types(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return tuple(convert_numpy_types(item) for item in obj)
+    else:
+        return obj
+
+
 class QueryParser:
 
     def __init__(self, db_manager):
         self.db_manager = db_manager
         self.active_db = None  # Will hold a Database instance after `USE DATABASE`
 
-    def execute(self, query: str):
+    def execute(self, query: str, json_resp=False):
+
         query = query.strip().rstrip(";")
         query = self._normalize_query_keywords(query)
+        self.json_resp = json_resp
         # upper_query = query.upper()
         print("===========================================")
         print(">> Query:", query)
@@ -58,6 +77,11 @@ class QueryParser:
         elif query.upper().startswith("DELETE FROM"):
             return self._delete(query)
         else:
+            if self.json_resp:
+                return {
+                    "status": "error",
+                    "message": f"Unsupported query: {query}"
+                }
             raise ValueError(f"❌ Unsupported query: {query}")
 
     def _normalize_query_keywords(self, query: str) -> str:
@@ -101,6 +125,8 @@ class QueryParser:
             raise ValueError("Syntax error in CREATE DATABASE statement.")
         db_name = tokens[2]
         self.db_manager.create_database(db_name)
+        if self.json_resp:
+            return {"status": "success", "message": f"Database '{db_name}' created.", "db_name": db_name}
         return f"✅ Database '{db_name}' created."
 
     def _drop_database(self, query):
@@ -109,6 +135,8 @@ class QueryParser:
             raise ValueError("Syntax error in DROP DATABASE statement.")
         db_name = tokens[2]
         self.db_manager.drop_database(db_name)
+        if self.json_resp:
+            return {"status": "success", "message": f"Database '{db_name}' deleted.", "db_name": db_name}
         return f"🗑️ Database '{db_name}' deleted."
 
     def _use_database(self, query):
@@ -117,12 +145,16 @@ class QueryParser:
             raise ValueError("Syntax error in USE DATABASE statement.")
         db_name = tokens[2]
         self.active_db = self.db_manager.use_database(db_name)
+        if self.json_resp:
+            return {"status": "success", "message": f"Switched to database '{db_name}'."}
         return f"📂 Switched to database '{db_name}'."
 
     def show_databases(self):
         databases = self.db_manager.list_databases()
         if not databases:
             return "No databases found."
+        if self.json_resp:
+            return {"status": "success", "databases": databases}
         return "\n".join([f"📁 {db}" for db in databases])
 
     def _create_table(self, query):
@@ -169,9 +201,24 @@ class QueryParser:
                 embedding_column=embedding_column
             )
 
+            if self.json_resp:
+                return {
+                    "status": "success",
+                    "message": f"Table '{table_name}' created.",
+                    "table_name": table_name,
+                    "schema": schema,
+                    "embedding_column": embedding_column,
+                    "dimension": dimension
+                }
+
             return f"✅ Table '{table_name}' created."
 
         except Exception as e:
+            if self.json_resp:
+                return {
+                    "status": "error",
+                    "message": f"Error parsing CREATE TABLE: {e}"
+                }
             return f"❌ Error parsing CREATE TABLE: {e}"
 
     def _drop_table(self, query):
@@ -184,12 +231,28 @@ class QueryParser:
         table_name = tokens[2]
 
         self.active_db.drop_table(table_name)
+        if self.json_resp:
+            return {
+                "status": "success",
+                "message": f"Table '{table_name}' dropped.",
+                "table_name": table_name
+            }
         return f"🗑️ Table '{table_name}' dropped."
 
     def _show_tables(self):
         if not self.active_db:
             raise Exception("❌ No active database.")
         tables = self.active_db.list_tables()
+        if self.json_resp:
+            return {
+                "status": "success",
+                "tables": [
+                    {
+                        "table_name": t["table_name"],
+                        "schema": t["schema"]
+                    } for t in tables
+                ]
+            }
         return "\n".join(
             [f"📄 {t['table_name']} (columns: {list(t['schema'].keys())})" for t in tables]
         ) or "No tables found."
@@ -229,10 +292,23 @@ class QueryParser:
             record = dict(zip(columns, values))
             table = self.active_db.get_table(table_name)
             vector_id = table.insert(record)
+            if self.json_resp:
+                return {
+                    "status": "success",
+                    "message": f"Inserted into '{table_name}' with vector ID {vector_id}.",
+                    "table_name": table_name,
+                    "vector_id": convert_numpy_types(vector_id),
+                    "record": record
+                }
 
             return f"✅ Inserted into '{table_name}' with vector ID {vector_id}"
 
         except Exception as e:
+            if self.json_resp:
+                return {
+                    "status": "error",
+                    "message": f"Error parsing INSERT INTO: {e}"
+                }
             return f"❌ Error parsing INSERT INTO: {e}"
 
     def _select(self, query):
@@ -317,9 +393,31 @@ class QueryParser:
                 query_text=query_text,
                 limit=limit
             )
+
+            response = []
+
+            for row in results:
+                if isinstance(row, tuple) and len(row) == 2:
+                    vector_id, metadata = row
+                    response.append((vector_id, metadata))
+                elif isinstance(row, tuple) and len(row) == 3:
+                    vector_id, distance, metadata = row
+                    response.append((vector_id, distance, metadata))
+
+            if self.json_resp:
+                return {
+                    "status": "success",
+                    "results": response,
+                }
+
             return self._format_select_results(results)
 
         except Exception as e:
+            if self.json_resp:
+                return {
+                    "status": "error",
+                    "message": f"Error parsing SELECT: {e}"
+                }
             return f"❌ Error parsing SELECT: {e}"
 
     def _format_select_results(self, results):
@@ -439,10 +537,20 @@ class QueryParser:
                     query_text=query_text,
                     limit=limit
                 )
+                if self.json_resp:
+                    return {
+                        "status": "success",
+                        "message": f"Updated {updated_count} record(s) in '{table_name}'."
+                    }
 
                 return f"✅ Updated {updated_count} record(s) in '{table_name}'."
 
         except Exception as e:
+            if self.json_resp:
+                return {
+                    "status": "error",
+                    "message": f"Error parsing UPDATE: {e}"
+                }
             return f"❌ Error parsing UPDATE: {e}"
 
     def _delete(self, query):
@@ -514,8 +622,20 @@ class QueryParser:
                 query_text=query_text,
                 limit=limit
             )
+            if self.json_resp:
+                return {
+                    "status": "success",
+                    "message": f"Deleted {deleted_count} record(s) from '{table_name}'.",
+                    "table_name": table_name,
+                    deleted_count: deleted_count
+                }
 
             return f"🗑️ Deleted {deleted_count} record(s) from '{table_name}'."
 
         except Exception as e:
+            if self.json_resp:
+                return {
+                    "status": "error",
+                    "message": f"Error parsing DELETE: {e}"
+                }
             return f"❌ Error parsing DELETE: {e}"
